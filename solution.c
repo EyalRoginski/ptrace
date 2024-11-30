@@ -1,45 +1,112 @@
+#define _GNU_SOURCE
 #include <sys/ptrace.h>
-#include <string.h>
 #include <linux/ptrace.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/user.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
 
-void print_registers(int server_pid)
+#define PIPE_NAME "pipe"
+
+unsigned long long get_rip(int server_pid)
 {
     struct user_regs_struct regs;
     ptrace(PTRACE_GETREGS, server_pid, 0, &regs);
-    printf("rip: %llx\n", regs.rip);
-    int peek = ptrace(PTRACE_PEEKTEXT, server_pid, regs.rip, 0);
-    printf("at rip: %x\n", peek);
-    printf("rsp: %llx\n", regs.rsp);
-    int peek_rsp = ptrace(PTRACE_PEEKTEXT, server_pid, regs.rsp, 0);
-    printf("at rsp: %x\n", peek_rsp);
+    return regs.rip;
 }
 
-void print_stack_to_stderr(int server_pid)
+#define WORD_SIZE sizeof(long)
+/**
+ * Print `count` words from the tracee's memory, starting at `location`.
+ * Prints it all in one line, so it is easier to manipulate later.
+ * Prints in hex.
+ * Prints to `file`
+ * */
+void get_mem_at(int server_pid, unsigned long long location, int count, char *buffer)
 {
-    struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, server_pid, 0, &regs);
-    unsigned long long pointer = regs.rsp;
-    int MAX = 1000;
-    int STEP = 4;
-    printf("STACK\n");
-    for (int i = -MAX; i < MAX; i++) {
-        int peek = ptrace(PTRACE_PEEKDATA, server_pid, pointer + i * STEP);
-        fprintf(stderr, "%llx %x\n", pointer + i * STEP, peek);
+    for (int i = 0; i < count; i++) {
+        long word = ptrace(PTRACE_PEEKDATA, server_pid, location + (i * WORD_SIZE), 0);
+        for (int j = 0; j < WORD_SIZE; j++) {
+            *buffer = word & 0xff;
+            buffer += 1;
+            word = word >> 8;
+        }
     }
 }
 
-void user_area_things(int server_pid)
+char *read_file(char *filename, int *size)
 {
-    struct user user;
-    int start_code = ptrace(PTRACE_PEEKUSER, server_pid, (void *)(&user.start_code) - (void *)(&user), 0);
-    printf("start_code: %d\n", start_code);
-    int start_stack = ptrace(PTRACE_PEEKUSER, server_pid, (void *)(&user.start_stack) - (void *)(&user), 0);
-    printf("start_stack: %d\n", start_stack);
+    FILE *file = fopen(filename, "r");
+    fseek(file, 0, SEEK_END);
+    int filesize = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    *size = filesize;
+
+    char *buffer = malloc(filesize);
+    fread(buffer, filesize, 1, file);
+    fclose(file);
+    return buffer;
+}
+
+#define CHECK_WORD_COUNT 20
+unsigned long long get_check_password_location(int server_pid)
+{
+    int code_len;
+    char *code = read_file("tracy-server", &code_len);
+
+    unsigned long long check_password_code_offset = 0x82cf0;
+    unsigned long long known_code_offset;
+    unsigned long long known_rip_offset;
+
+    while (1) {
+        unsigned long long rip = get_rip(server_pid);
+        printf("Checking %llx...\n", rip);
+
+        char memory[CHECK_WORD_COUNT * WORD_SIZE];
+
+        get_mem_at(server_pid, rip, CHECK_WORD_COUNT, memory);
+        char *index = memmem(code, code_len, memory, sizeof(memory));
+        if (index) {
+            known_code_offset = (index - code);
+            known_rip_offset = rip;
+            break;
+        }
+
+        // fprintf(fifo, "\n");
+        //
+        // unsigned long long answer = 0;
+        // fscanf(fifo, "%llx", &answer);
+        // printf("got answer: %llx\n", answer);
+        // if (answer != 0) {
+        //     known_code_offset = answer;
+        //     known_rip_offset = rip;
+        //     break;
+        // }
+
+        ptrace(PTRACE_SINGLESTEP, server_pid, 0, 0);
+        waitpid(server_pid, 0, __WALL);
+    }
+    free(code);
+
+    unsigned long long check_password_rip = known_rip_offset - known_code_offset + check_password_code_offset;
+
+    return check_password_rip;
+}
+
+void print_mem_at(int server_pid, unsigned long long location, int count)
+{
+    printf("-- Code at %llx --\n", location);
+    for (int i = 0; i < count; i++) {
+        long word = ptrace(PTRACE_PEEKDATA, server_pid, location + (i * WORD_SIZE), 0);
+        word = htobe64(word); // Big endian so it prints in the same order as objdump.
+        printf("%lx", word);
+    }
+    printf("\n-- END Code --\n");
 }
 
 int main(int argc, char *argv[])
@@ -47,48 +114,17 @@ int main(int argc, char *argv[])
     int server_pid = atoi(argv[1]);
     printf("attaching to pid %d\n", server_pid);
     int result = ptrace(PTRACE_ATTACH, server_pid, 0, 0);
-    printf("result %d\n", result);
     if (result != 0) {
+        perror("Failed to attach to server");
         return 1;
     }
-    ptrace(PTRACE_SETOPTIONS, server_pid, 0, PTRACE_O_TRACESYSGOOD);
     int status;
     waitpid(server_pid, &status, __WALL);
-    user_area_things(server_pid);
-    struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, server_pid, 0, &regs);
-    print_registers(server_pid);
-    ptrace(PTRACE_SYSCALL, server_pid, 0, 0);
-    while (1) {
-        waitpid(server_pid, &status, __WALL);
-        printf("Caught signal, status: %d\n", status);
-        if (!WIFSTOPPED(status)) {
-            // Not really stopped?
-            printf("Not really stopped.\n");
-            ptrace(PTRACE_SYSCALL, server_pid, 0, 0);
-            continue;
-        }
-        printf("Signal that stopped server: %d\n", WSTOPSIG(status));
-        if (!(WSTOPSIG(status) == (SIGTRAP | 0x80))) {
-            // Not a syscall.
-            printf("Stopped by signal, not syscall. Continuing...\n");
-            ptrace(PTRACE_SYSCALL, server_pid, 0, 0);
-            continue;
-        }
-        struct ptrace_syscall_info info;
-        memset(&info, 0, sizeof(info));
-        int syscall_get_res = ptrace(PTRACE_GET_SYSCALL_INFO, server_pid, sizeof(info), &info);
-        if (info.op == PTRACE_SYSCALL_INFO_ENTRY) {
-            // Entry into syscall
-            printf("syscall entry, number: %lld\n", info.entry.nr);
-            print_registers(server_pid);
-            print_stack_to_stderr(server_pid);
-        } else if (info.op == PTRACE_SYSCALL_INFO_EXIT) {
-            // Exit from syscall, interesting!
-            printf("syscall exit, return value: %lld\n", info.exit.rval);
-        }
-        printf("Stopped by syscall, continuing...\n");
-        ptrace(PTRACE_SYSCALL, server_pid, 0, 0);
-    }
+    unsigned long long func_location = get_check_password_location(server_pid);
+    printf("check_password location: %llx\n", func_location);
+    printf("And I'll prove it!\n");
+    print_mem_at(server_pid, func_location, 100);
+    ptrace(PTRACE_CONT, server_pid, 0, 0);
+
     return 0;
 }

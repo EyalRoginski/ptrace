@@ -85,3 +85,13 @@ New idea: Retrieve what's executing currently, and search for it in the source f
 and thus know the offset, and try using that!
 Ok, it works I think... I'm doing it through python since it's more convenient to search
 there, and I need to figure out how to route it back in. Maybe named pipe?
+
+It works! Not automatically yet, but I managed to get the position of the function in the running
+process and I checked and it did contain the actual code of `check_password`.
+Struggling a bit with the IPC between python and my C code... So I'll try doing it in C.
+
+Managed to do it in C! I can now officially obtain the location of check_password
+on any running server.
+
+Let's see if I can get it to jump to my own code.
+

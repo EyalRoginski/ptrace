@@ -64,6 +64,13 @@ void run_check(int server_pid)
     }
 }
 
+void print_things_for_python(int server_pid)
+{
+
+    print_mem_at(server_pid, get_rip(server_pid), 20);
+    printf(" %llx\n", get_rip(server_pid));
+}
+
 int main(int argc, char *argv[])
 {
     int server_pid = atoi(argv[1]);
@@ -75,10 +82,9 @@ int main(int argc, char *argv[])
     while (1) {
         int status;
         waitpid(server_pid, &status, __WALL);
-        fprintf(stderr, "Step %d -- rip: %llx ; current: %lx\n", step, get_rip(server_pid), get_current_instruction(server_pid));
+        // fprintf(stderr, "Step %d -- rip: %llx ; current: %lx\n", step, get_rip(server_pid), get_current_instruction(server_pid));
         step++;
-        print_mem_at(server_pid, get_rip(server_pid), 20);
-        printf("\n");
+        print_things_for_python(server_pid);
         // run_check(server_pid);
         // Continue until next instruction.
         ptrace(PTRACE_SINGLESTEP, server_pid, 0, 0);
