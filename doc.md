@@ -80,3 +80,8 @@ The last 3-4 digits are the same, so the randomness is not very granular.
 New idea: Look for the function using its actual bytes.
 I'm finding things that are similar to the function, but not identical...
 Not finding anything that is identical to the function, which is really weird.
+
+New idea: Retrieve what's executing currently, and search for it in the source file,
+and thus know the offset, and try using that!
+Ok, it works I think... I'm doing it through python since it's more convenient to search
+there, and I need to figure out how to route it back in. Maybe named pipe?
