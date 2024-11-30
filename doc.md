@@ -93,5 +93,8 @@ Struggling a bit with the IPC between python and my C code... So I'll try doing 
 Managed to do it in C! I can now officially obtain the location of check_password
 on any running server.
 
+Tests also confirm that it changes location each time I run the server.
+
 Let's see if I can get it to jump to my own code.
+
 
