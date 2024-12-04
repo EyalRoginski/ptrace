@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #define PIPE_NAME "pipe"
 
@@ -123,16 +124,14 @@ void print_registers(int server_pid)
     printf("cs: %llx\n", regs.cs);
 }
 
-unsigned long long mmap_me(int server_pid)
+/**
+ * Mmaps a new page to do whatever I want in. Executes the `syscall` instruction at `where`,
+ * so that should be mapped and executable (`rip` for example)
+ * */
+unsigned long long mmap_me(int server_pid, unsigned long long where)
 {
     unsigned long mmap_code[] = {
-        be64toh(0x48C7C70000000048),
-        be64toh(0xC7C60010000048C7),
-        be64toh(0xC20700000049C7C2),
-        be64toh(0x2000000049C7C000),
-        be64toh(0x00000049C7C10000),
-        be64toh(0x000048C7C0090000),
-        be64toh(0x000F050000000000),
+        be64toh(0x0f05000000000000)
     };
 #define MMAP_CODE_LEN sizeof(mmap_code) / sizeof(unsigned long)
     // Save state
@@ -140,17 +139,27 @@ unsigned long long mmap_me(int server_pid)
     ptrace(PTRACE_GETREGS, server_pid, 0, &original_regs);
     unsigned long long rip = original_regs.rip;
     unsigned long original_code[MMAP_CODE_LEN];
-    get_mem_at_words(server_pid, rip, MMAP_CODE_LEN, original_code);
+    get_mem_at_words(server_pid, where, MMAP_CODE_LEN, original_code);
 
+    // Set registers
+    struct user_regs_struct call_regs;
+    memcpy(&call_regs, &original_regs, sizeof(original_regs));
+    call_regs.rdi = 0; // addr
+    call_regs.rsi = 0x1000; // length
+    call_regs.rdx = PROT_EXEC | PROT_READ | PROT_WRITE; // prot
+    call_regs.r10 = MAP_PRIVATE | MAP_ANONYMOUS; // flags
+    call_regs.r8 = 0; // fd
+    call_regs.r9 = 0; // offset
+    call_regs.rax = 9; // mmap syscall
+
+    call_regs.rip = where;
     // Execute code
-    write_words_at(server_pid, rip, MMAP_CODE_LEN, mmap_code);
+    write_words_at(server_pid, where, MMAP_CODE_LEN, mmap_code);
+    ptrace(PTRACE_SETREGS, server_pid, 0, &call_regs);
 
-    print_mem_at(server_pid, rip, 10);
-
-    for (int i = 0; i < MMAP_CODE_LEN - 1; i++) {
+    for (int i = 0; i < MMAP_CODE_LEN; i++) {
         ptrace(PTRACE_SINGLESTEP, server_pid, 0, 0);
         waitpid(server_pid, 0, __WALL);
-        print_registers(server_pid);
     }
 
     // Get return value
@@ -160,9 +169,13 @@ unsigned long long mmap_me(int server_pid)
 
     // Restore state
     ptrace(PTRACE_SETREGS, server_pid, 0, &original_regs);
-    write_words_at(server_pid, rip, MMAP_CODE_LEN, original_code);
+    write_words_at(server_pid, where, MMAP_CODE_LEN, original_code);
 
     return ret_value;
+}
+
+void write_jump_code()
+{
 }
 
 int main(int argc, char *argv[])
@@ -177,19 +190,17 @@ int main(int argc, char *argv[])
     int status;
     waitpid(server_pid, &status, __WALL);
 
-    unsigned long long mmap_location = mmap_me(server_pid);
+    unsigned long long mmap_location = mmap_me(server_pid, get_rip(server_pid));
     printf("mmap_location: %llx\n", mmap_location);
-    print_mem_at(server_pid, mmap_location, 0x1000);
-
-    ptrace(PTRACE_CONT, server_pid, 0, 0);
-
-    return 0;
 
     unsigned long long func_location = get_check_password_location(server_pid);
     printf("check_password location: %llx\n", func_location);
+    print_mem_at(server_pid, func_location, 100);
+
+    ptrace(PTRACE_CONT, server_pid, 0, 0);
+    return 0;
 
     unsigned int check_password_code_offset = 0x82cf0;
-    print_mem_at(server_pid, func_location - check_password_code_offset, 100);
     unsigned int file_size = 0x820440;
     unsigned int jump_offset = -check_password_code_offset;
 
