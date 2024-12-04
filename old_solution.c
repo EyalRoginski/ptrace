@@ -19,6 +19,17 @@ void print_registers(int server_pid)
     printf("at rsp: %x\n", peek_rsp);
 }
 
+void print_mem_at(int server_pid, unsigned long long location, int count)
+{
+    printf("-- Code at %llx --\n", location);
+    for (int i = 0; i < count; i++) {
+        long word = ptrace(PTRACE_PEEKDATA, server_pid, location + (i * sizeof(unsigned long)), 0);
+        word = htobe64(word); // Big endian so it prints in the same order as objdump.
+        printf("%016lx", word);
+    }
+    printf("\n-- END Code --\n");
+}
+
 void print_stack_to_stderr(int server_pid)
 {
     struct user_regs_struct regs;

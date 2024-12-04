@@ -111,3 +111,11 @@ jump back, without causing problems to the program. I think.
 Now just to write the final assembly to check if it's "arazim", and I'm done!
 
 I managed a final POC before fully making it: It only accepts inputs that are 6 characters long.
+
+**It works!**
+
+To run, use: 
+
+```
+gcc solution.c -o backdoor && ./backdoor <pid of tracy-server>
+```
