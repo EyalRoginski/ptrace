@@ -97,4 +97,11 @@ Tests also confirm that it changes location each time I run the server.
 
 Let's see if I can get it to jump to my own code.
 
+Problem: Where do I put my code so that it can jump to it?
+And also it needs not to get overwritten...
 
+Seems that this is quite a hard problem... I can't think of anywhere to actually put it where it's
+gonna be able to execute the code (needs to be allocated but not in use) maybe in the data segment?
+How do I find that?
+
+Idea: allocate memory and run the code there? It's kind of cumbersome, but it might work.

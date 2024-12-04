@@ -1,0 +1,4 @@
+h = "48C7C70000000048C7C60010000048C7C20700000049C7C22000000049C7C00000000049C7C10000000048C7C0090000000F05"
+chunks = [h[i : i + 16] for i in range(0, len(h), 16)]
+for c in chunks:
+    print(f"be64toh(0x{c}),")
