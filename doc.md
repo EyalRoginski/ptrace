@@ -105,3 +105,9 @@ gonna be able to execute the code (needs to be allocated but not in use) maybe i
 How do I find that?
 
 Idea: allocate memory and run the code there? It's kind of cumbersome, but it might work.
+
+It did work! I managed to jump to it, and return 1 from there. I also managed to jump to it and
+jump back, without causing problems to the program. I think.
+Now just to write the final assembly to check if it's "arazim", and I'm done!
+
+I managed a final POC before fully making it: It only accepts inputs that are 6 characters long.
